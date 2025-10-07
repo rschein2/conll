@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Data files
+CorefUD-1.3-public/
+CorefUD-1.3-public.zip
+allzip.zip
+*.conllu
+*.zip
+
+# Results
+llm_coref_results.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
