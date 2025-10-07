@@ -55,9 +55,9 @@ def evaluate_qa_items(items: List[QAItem]) -> Tuple[List[str], Dict]:
     """
     Evaluate LLM on pronoun coreference QA items.
     Returns: (predictions, metrics)
+    Uses the new multi-mode evaluation from corefud_qa.
     """
     predictions = []
-    correct = 0
 
     for i, item in enumerate(items):
         # Build prompt
@@ -67,22 +67,13 @@ def evaluate_qa_items(items: List[QAItem]) -> Tuple[List[str], Dict]:
         pred = call_llm(prompt)
         predictions.append(pred)
 
-        # Check if correct (simple string matching)
-        pred_norm = normalize_span(pred)
-        gold_norms = {normalize_span(g) for g in item.gold_spans}
-        if pred_norm in gold_norms:
-            correct += 1
-
         # Progress
         if (i + 1) % 100 == 0:
             print(f"  Evaluated {i + 1}/{len(items)} items...")
 
-    accuracy = correct / len(items) if items else 0.0
-    metrics = {
-        "total": len(items),
-        "correct": correct,
-        "accuracy": accuracy
-    }
+    # Use the evaluate_predictions function from corefud_qa which supports all 4 matching modes
+    from corefud_qa import evaluate_predictions
+    metrics = evaluate_predictions(items, predictions)
 
     return predictions, metrics
 
@@ -185,11 +176,19 @@ def main(corefud_root: str, max_items: int = 100):
     print(f"\n{'=' * 80}")
     print("QA-BASED EVALUATION RESULTS")
     print('=' * 80)
-    print(f"Total items: {metrics['total']}")
-    print(f"Correct: {metrics['correct']}")
-    print(f"Accuracy: {metrics['accuracy']:.2%}")
+    print(f"Total items: {metrics['n_items']}")
+    print()
+    print("Matching Mode Results:")
+    print(f"  Exact Match:       {metrics['exact_match']['correct']:4d} / {metrics['n_items']} = {metrics['exact_match']['accuracy']:6.2%}")
+    print(f"  Partial Match:     {metrics['partial_match']['correct']:4d} / {metrics['n_items']} = {metrics['partial_match']['accuracy']:6.2%}")
+    print(f"  Token F1 ≥ 0.6:    {metrics['token_f1_match']['correct']:4d} / {metrics['n_items']} = {metrics['token_f1_match']['accuracy']:6.2%}")
+    print(f"  Head Word Match:   {metrics['head_word_match']['correct']:4d} / {metrics['n_items']} = {metrics['head_word_match']['accuracy']:6.2%}  ← Primary (CRAC-inspired)")
+    print()
+    print(f"Primary Metric (Head Word Match): {metrics['head_word_match']['accuracy']:.2%}")
 
     # 4. Save results
+    from corefud_qa import exact_match, partial_match, token_f1_match, head_word_match
+
     results = {
         "metrics": metrics,
         "predictions": [
@@ -198,7 +197,12 @@ def main(corefud_root: str, max_items: int = 100):
                 "pronoun": item.pron_form,
                 "prediction": pred,
                 "gold_answers": item.gold_spans,
-                "correct": normalize_span(pred) in {normalize_span(g) for g in item.gold_spans}
+                "evaluation": {
+                    "exact_match": exact_match(pred, item.gold_spans),
+                    "partial_match": partial_match(pred, item.gold_spans),
+                    "token_f1_match": token_f1_match(pred, item.gold_spans),
+                    "head_word_match": head_word_match(pred, item.gold_spans)
+                }
             }
             for item, pred in zip(all_items, predictions)
         ]

@@ -84,11 +84,50 @@ venv/bin/python llm_coref_benchmark.py CorefUD-1.3-public 100
 
 This will:
 1. Extract 100 pronoun coreference QA items
-2. Evaluate your LLM on them
-3. Report accuracy
+2. Evaluate your LLM using 4 different matching strategies
+3. Report accuracy for each matching mode
 4. Save detailed results to `llm_coref_results.json`
 
-### 4. Use Official CorefUD Scorer
+**Example output:**
+```
+Matching Mode Results:
+  Exact Match:       45 / 100 = 45.00%
+  Partial Match:     68 / 100 = 68.00%
+  Token F1 ≥ 0.6:    63 / 100 = 63.00%
+  Head Word Match:   71 / 100 = 71.00%  ← Primary (CRAC-inspired)
+
+Primary Metric (Head Word Match): 71.00%
+```
+
+### 4. Evaluation Matching Modes
+
+The benchmark uses **4 matching strategies** inspired by CRAC shared task evaluation:
+
+#### **Head Word Match** (Primary Metric - CRAC-inspired)
+- Matches on syntactic head noun only
+- Most linguistically motivated
+- Accepts: `"native-like levels"` for gold `"native-like levels of use and neurocognitive processing"` ✓
+- Both have head word `"levels"`
+
+#### **Partial Match** (Lenient)
+- Accepts if prediction is substring of gold OR vice versa
+- Good for recall-focused evaluation
+- Accepts: `"native-like levels"` ⊆ `"native-like levels of use..."` ✓
+
+#### **Token F1 Match** (Balanced)
+- Computes token-level F1 score
+- Accepts if F1 ≥ 0.6 threshold
+- Handles partial overlaps fairly
+- Example: {native-like, levels} ∩ {such, native-like, levels} → F1 = 0.80 ✓
+
+#### **Exact Match** (Strict)
+- Requires normalized string match
+- Most conservative metric
+- Baseline for comparison
+
+**Why multiple metrics?** LLMs may identify the correct referent but use a different span length (e.g., `"levels"` vs `"native-like levels of use"`). Head word matching gives credit when the LLM correctly identifies the entity, similar to how CRAC 2024 evaluates systems.
+
+### 5. Use Official CorefUD Scorer
 
 The official scorer compares two CoNLL-U files (gold vs predicted) and computes standard metrics:
 
@@ -154,9 +193,22 @@ Edit `PRON_FORMS` in `corefud_qa.py` to focus on specific pronouns (e.g., only `
 
 ### For QA-Based Evaluation
 
-1. Implement your `call_llm()` function
-2. Run `llm_coref_benchmark.py`
-3. Analyze results in `llm_coref_results.json`
+1. Implement your `call_llm()` function in `llm_coref_benchmark.py`
+2. Run the benchmark: `venv/bin/python llm_coref_benchmark.py CorefUD-1.3-public 1000`
+3. Review results across all 4 matching modes
+4. Use **Head Word Match** as primary metric for comparing models (CRAC-inspired)
+5. Analyze per-example results in `llm_coref_results.json`
+
+**Comparing models:**
+```python
+# Baseline model results
+baseline_head_match = 65.3%
+
+# Your experimental model results
+experimental_head_match = 72.1%
+
+# Improvement: +6.8 percentage points
+```
 
 ### For Official Scorer Evaluation
 
@@ -168,14 +220,24 @@ The official scorer requires predicted Entity annotations in CoNLL-U format. To 
 
 This is more complex but gives you standard CRAC shared task metrics.
 
-## Key Bug Fix
+## Key Improvements
 
+### Bug Fix: Single-Token Mention Parsing
 The original code had a critical bug in parsing single-token mentions. CorefUD uses:
 - `(eID-attributes)` for single tokens (both open & close brackets)
 - The regex only detected closes in format `eID)` without preceding `(`
 - **Result:** Missed most pronouns (only found 3 instead of 1,917!)
 
 **Fix:** Added logic to detect when Entity annotation contains both `(` and `)`, indicating a complete single-token mention.
+
+### Fair Evaluation with Multiple Matching Modes
+Added CRAC-inspired evaluation that recognizes correct answers even with different span lengths:
+- **Head Word Match**: Primary metric matching on syntactic heads (like CRAC 2024)
+- **Partial Match**: Lenient substring matching
+- **Token F1**: Balanced token overlap scoring
+- **Exact Match**: Strict baseline
+
+This gives fair credit when LLMs identify the correct referent but use different boundaries (e.g., `"levels"` vs `"native-like levels of use"`), similar to how the official CRAC shared task evaluates systems.
 
 ## References
 

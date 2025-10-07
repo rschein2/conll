@@ -213,28 +213,169 @@ def call_llm(prompt: str) -> str:
     """
     raise NotImplementedError("Plug in your LLM here")
 
+# -----------------------------
+# Matching functions for evaluation
+# -----------------------------
+
+def extract_head_word(span: str) -> str:
+    """
+    Extract the syntactic head word from a span.
+    Simple heuristic: last content word before prepositions/conjunctions.
+    """
+    tokens = normalize_span(span).split()
+    if not tokens:
+        return ""
+
+    # Common prepositions and conjunctions to skip
+    stop_words = {'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'from',
+                  'and', 'or', 'but', 'as', 'about', 'after', 'before'}
+
+    # Find last non-stop word
+    for i in range(len(tokens) - 1, -1, -1):
+        if tokens[i] not in stop_words:
+            return tokens[i]
+
+    return tokens[-1]
+
+def head_word_match(pred: str, gold_spans: List[str]) -> bool:
+    """
+    Match based on syntactic head word only.
+    Inspired by CRAC head matching evaluation.
+    """
+    pred_head = extract_head_word(pred)
+    if not pred_head:
+        return False
+
+    for gold in gold_spans:
+        if pred_head == extract_head_word(gold):
+            return True
+    return False
+
+def partial_match(pred: str, gold_spans: List[str]) -> bool:
+    """
+    Accept if predicted span is substring of gold OR gold is substring of predicted.
+    Lenient matching for when LLM identifies correct referent but different span.
+    """
+    pred_norm = normalize_span(pred)
+    if not pred_norm:
+        return False
+
+    for gold in gold_spans:
+        gold_norm = normalize_span(gold)
+        if pred_norm in gold_norm or gold_norm in pred_norm:
+            return True
+    return False
+
+def token_f1_match(pred: str, gold_spans: List[str], threshold: float = 0.6) -> bool:
+    """
+    Compute token-level F1 score between prediction and gold.
+    Accept if F1 >= threshold (default 0.6).
+    """
+    pred_tokens = set(normalize_span(pred).split())
+    if not pred_tokens:
+        return False
+
+    for gold in gold_spans:
+        gold_tokens = set(normalize_span(gold).split())
+        if not gold_tokens:
+            continue
+
+        overlap = len(pred_tokens & gold_tokens)
+        if overlap == 0:
+            continue
+
+        precision = overlap / len(pred_tokens)
+        recall = overlap / len(gold_tokens)
+        f1 = 2 * precision * recall / (precision + recall)
+
+        if f1 >= threshold:
+            return True
+    return False
+
+def exact_match(pred: str, gold_spans: List[str]) -> bool:
+    """
+    Exact string match after normalization.
+    Strictest evaluation mode.
+    """
+    pred_norm = normalize_span(pred)
+    gold_norms = {normalize_span(g) for g in gold_spans}
+    return pred_norm in gold_norms
+
 def evaluate_predictions(items: List[QAItem], preds: List[str]) -> Dict:
+    """
+    Evaluate predictions using multiple matching strategies.
+    Returns accuracy for exact, partial, token_f1, and head_word matching.
+    """
     assert len(items) == len(preds)
     total = len(items)
-    correct = 0
+
+    # Track counts for each matching mode
+    exact_correct = 0
+    partial_correct = 0
+    token_f1_correct = 0
+    head_correct = 0
+
+    # Per-pronoun tracking for each mode
     by_pron = collections.Counter()
-    by_pron_correct = collections.Counter()
+    by_pron_exact = collections.Counter()
+    by_pron_partial = collections.Counter()
+    by_pron_token_f1 = collections.Counter()
+    by_pron_head = collections.Counter()
 
     for it, pred in zip(items, preds):
-        pred_norm = normalize_span(pred)
-        gold_norms = {normalize_span(g) for g in it.gold_spans}
-        ok = pred_norm in gold_norms
         by_pron[it.pron_form] += 1
-        if ok:
-            by_pron_correct[it.pron_form] += 1
-            correct += 1
 
-    overall = correct / total if total else 0.0
-    per_pron = {p: (by_pron_correct[p] / n if n else 0.0) for p, n in by_pron.items()}
+        # Evaluate using all 4 matching modes
+        if exact_match(pred, it.gold_spans):
+            exact_correct += 1
+            by_pron_exact[it.pron_form] += 1
+
+        if partial_match(pred, it.gold_spans):
+            partial_correct += 1
+            by_pron_partial[it.pron_form] += 1
+
+        if token_f1_match(pred, it.gold_spans):
+            token_f1_correct += 1
+            by_pron_token_f1[it.pron_form] += 1
+
+        if head_word_match(pred, it.gold_spans):
+            head_correct += 1
+            by_pron_head[it.pron_form] += 1
+
+    # Calculate overall accuracies
+    exact_acc = exact_correct / total if total else 0.0
+    partial_acc = partial_correct / total if total else 0.0
+    token_f1_acc = token_f1_correct / total if total else 0.0
+    head_acc = head_correct / total if total else 0.0
+
+    # Per-pronoun accuracies
+    per_pron_exact = {p: (by_pron_exact[p] / n if n else 0.0) for p, n in by_pron.items()}
+    per_pron_partial = {p: (by_pron_partial[p] / n if n else 0.0) for p, n in by_pron.items()}
+    per_pron_token_f1 = {p: (by_pron_token_f1[p] / n if n else 0.0) for p, n in by_pron.items()}
+    per_pron_head = {p: (by_pron_head[p] / n if n else 0.0) for p, n in by_pron.items()}
+
     return {
         "n_items": total,
-        "accuracy": overall,
-        "per_pron_accuracy": per_pron,
+        "exact_match": {
+            "accuracy": exact_acc,
+            "correct": exact_correct,
+            "per_pronoun": per_pron_exact
+        },
+        "partial_match": {
+            "accuracy": partial_acc,
+            "correct": partial_correct,
+            "per_pronoun": per_pron_partial
+        },
+        "token_f1_match": {
+            "accuracy": token_f1_acc,
+            "correct": token_f1_correct,
+            "per_pronoun": per_pron_token_f1
+        },
+        "head_word_match": {
+            "accuracy": head_acc,
+            "correct": head_correct,
+            "per_pronoun": per_pron_head
+        }
     }
 
 # -----------------------------
